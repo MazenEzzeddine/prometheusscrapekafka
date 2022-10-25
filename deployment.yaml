@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    app: workload
+  name: workload
+spec:
+  restartPolicy: Never
+  containers:
+    - name: java-kafka-producer
+      #image: docker.io/mezzeddine/tracepersecskewed:v1, traceproducerpersec2hskewed:v0
+      image: docker.io/mezzeddine/traceproducerpersec2hskewed:v0
+
+    
+      env:
+        - name: BOOTSTRAP_SERVERS
+          value: my-cluster-kafka-bootstrap:9092
+        - name: TOPIC
+          value: testtopic1
+        - name: DELAY_MS
+          value: "1000"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: PRODUCER_ACKS
+          value: "0"
+        - name: ADDITIONAL_CONFIG
+          value: |
+                retries=100
+---
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    labels:
+      app: strimzi
+    name: prometheusscrapeconsumer
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: strimzi
+    template:
+      metadata:
+        labels:
+          app: strimzi
+      spec:
+        containers:
+          - name: cons1persec
+            image: docker.io/mezzeddine/prometheusscrapeconsumer:v0
+            ports:
+              - containerPort: 8080
+                name: brom
+            env:
+              - name: BOOTSTRAP_SERVERS
+                value: my-cluster-kafka-bootstrap:9092
+              - name: TOPIC
+                value: testtopic1
+              - name: GROUP_ID
+                value: testgroup1
+              - name: LOG_LEVEL
+                value: "INFO"
+              - name: SLEEP
+                value: "10"
+              - name: MESSAGE_COUNT
+                value: "1000000"
+              - name: ADDITIONAL_CONFIG
+                value: |
+                  max.poll.records=100
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: demoobservabilitypodmonitor
+  labels:
+    app: strimzi
+spec:
+  selector:
+    matchLabels:
+      app: strimzi
+  namespaceSelector:
+    matchNames:
+      - default
+  podMetricsEndpoints:
+    - path: /prometheus
+      port: brom
+      interval: 5s
