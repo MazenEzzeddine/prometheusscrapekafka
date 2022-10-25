@@ -1,4 +1,7 @@
 import com.sun.net.httpserver.HttpServer;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
 import io.micrometer.prometheus.PrometheusConfig;
 import io.micrometer.prometheus.PrometheusMeterRegistry;
@@ -32,6 +35,11 @@ public class ConsumerThread {
 
     static PrometheusMeterRegistry prometheusRegistry;
     static Timer timer;
+
+    static Counter pollCounter;
+    static Gauge gauge;
+
+    static  TimeMeasure measure;
 
     public static void main(String[] args) {
 
@@ -102,6 +110,8 @@ public class ConsumerThread {
                     log.info("Number of events non violating {}", eventsNonViolating);
                     log.info(" Number of events violating {}", eventsViolating);
                     timer.record(Duration.ofMillis(timeAfterPollingProcessingAndCommit - timeBeforePolling));
+                    pollCounter.increment();
+                    measure.setDuration(timeAfterPollingProcessingAndCommit - timeBeforePolling);
                 }
 
             }
@@ -132,6 +142,11 @@ public class ConsumerThread {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+
+        measure = new TimeMeasure(0.0);
+
+        pollCounter =  prometheusRegistry.counter("pollcounter");
+        gauge = Gauge.builder("timegauge", measure , TimeMeasure::getDuration).register(prometheusRegistry);//prometheusRegistry.gauge("timergauge" );
 
         timer = prometheusRegistry.timer("timer");
 
