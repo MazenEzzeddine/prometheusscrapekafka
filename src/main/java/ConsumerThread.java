@@ -13,6 +13,7 @@ import org.apache.logging.log4j.Logger;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.sql.Time;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Properties;
@@ -27,7 +28,6 @@ public class ConsumerThread {
     static float maxConsumptionRatePerConsumer = 0.0f;
     static float ConsumptionRatePerConsumerInThisPoll = 0.0f;
     static float averageRatePerConsumerForGrpc = 0.0f;
-
     static long pollsSoFar = 0;
     static Double maxConsumptionRatePerConsumer1 = 0.0d;
     //Long[] waitingTimes = new Long[10];
@@ -35,15 +35,18 @@ public class ConsumerThread {
 
     static PrometheusMeterRegistry prometheusRegistry;
     static Timer timer;
-
     static Counter pollCounter;
     static Gauge gauge;
-
+    static Gauge gaugeafter;
     static  TimeMeasure measure;
+    static  TimeMeasure measureafter;
+    static  TimeMeasure latencygaugemeasure;
+    static Gauge latencygauge;
+    static Timer mynewTimer;
+
+
 
     public static void main(String[] args) {
-
-
         KafkaConsumerConfig config = KafkaConsumerConfig.fromEnv();
         log.info(KafkaConsumerConfig.class.getName() + ": {}", config.toString());
         Properties props = KafkaConsumerConfig.createProperties(config);
@@ -65,10 +68,12 @@ public class ConsumerThread {
                 Long timeBeforePolling = System.currentTimeMillis();
                 ConsumerRecords<String, Customer> records = consumer.poll(Duration.ofMillis(Long.MAX_VALUE));
                 //ConsumerRecords<String, Customer> records = consumer.poll(Duration.ofMillis(0));
+                Long timeAfterPolling = System.currentTimeMillis();
                 if (records.count() != 0) {
                     // Long timeBeforePolling = System.currentTimeMillis();
                     for (ConsumerRecord<String, Customer> record : records) {
                         totalEvents++;
+                        latencygaugemeasure.setDuration(System.currentTimeMillis() - record.timestamp());
                         if (System.currentTimeMillis() - record.timestamp() <= 5000) {
                             eventsNonViolating++;
                         } else {
@@ -76,13 +81,17 @@ public class ConsumerThread {
                         }
                         //TODO sleep per record or per batch
                         try {
+
                             Thread.sleep(Long.parseLong(config.getSleep()));
                             // log.info("Sleeping for {}", config.getSleep());
                         } catch (InterruptedException e) {
                             e.printStackTrace();
                         }
-                    }
 
+                        mynewTimer.record(Duration.ofMillis(System.currentTimeMillis() - record.timestamp()));
+
+                    }
+                    //                        latencygaugemeasure.setDuration(System.currentTimeMillis() - record.timestamp());
                     if (commit) {
                         consumer.commitSync();
                     }
@@ -93,14 +102,12 @@ public class ConsumerThread {
                     pollsSoFar += 1;
                     averageRatePerConsumerForGrpc = averageRatePerConsumerForGrpc +
                             (ConsumptionRatePerConsumerInThisPoll - averageRatePerConsumerForGrpc) / (float) (pollsSoFar);
-
                     if (maxConsumptionRatePerConsumer < ConsumptionRatePerConsumerInThisPoll) {
                         maxConsumptionRatePerConsumer = ConsumptionRatePerConsumerInThisPoll;
                     }
                     maxConsumptionRatePerConsumer1 = Double.parseDouble(String.valueOf(averageRatePerConsumerForGrpc));
                     log.info("ConsumptionRatePerConsumerInThisPoll in this poll {}", ConsumptionRatePerConsumerInThisPoll);
                     log.info("maxConsumptionRatePerConsumer {}", maxConsumptionRatePerConsumer);
-
                     log.info("averageRatePerConsumerForGrpc  {}", averageRatePerConsumerForGrpc);
                     double percentViolating = (double) eventsViolating / (double) totalEvents;
                     double percentNonViolating = (double) eventsNonViolating / (double) totalEvents;
@@ -112,8 +119,8 @@ public class ConsumerThread {
                     timer.record(Duration.ofMillis(timeAfterPollingProcessingAndCommit - timeBeforePolling));
                     pollCounter.increment();
                     measure.setDuration(timeAfterPollingProcessingAndCommit - timeBeforePolling);
+                    measureafter.setDuration(timeAfterPollingProcessingAndCommit - timeAfterPolling);
                 }
-
             }
         } catch (WakeupException e) {
             // e.printStackTrace();
@@ -122,7 +129,6 @@ public class ConsumerThread {
             log.info("You may want to print the events");
             log.info("Closed consumer and we are done");
         }
-
     }
 
 
@@ -137,18 +143,31 @@ public class ConsumerThread {
                     os.write(response.getBytes());
                 }
             });
-
             new Thread(server::start).start();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
 
         measure = new TimeMeasure(0.0);
+        measureafter = new TimeMeasure(0.0);
+        latencygaugemeasure = new TimeMeasure(0.0);
+
+        //counter =
+        //        Counter.builder("order_created")
+        //            .description("number of orders created")
+        //            .register(meterRegistry);
+
+
 
         pollCounter =  prometheusRegistry.counter("pollcounter");
+        latencygauge = Gauge.builder("latencygauge", latencygaugemeasure , TimeMeasure::getDuration).register(prometheusRegistry);//prometheusRegistry.gauge("timergauge" );
+
         gauge = Gauge.builder("timegauge", measure , TimeMeasure::getDuration).register(prometheusRegistry);//prometheusRegistry.gauge("timergauge" );
+        gaugeafter = Gauge.builder("timegaugeafter", measureafter , TimeMeasure::getDuration).register(prometheusRegistry);//prometheusRegistry.gauge("timergauge" );
+        timer = prometheusRegistry.timer("timer");
+                 //  .publishPercentiles(0.5, 0.80, 0.90, 0.95, 0.99, 0.999)
 
         timer = prometheusRegistry.timer("timer");
-
+        mynewTimer = Timer.builder("mynewlatency").publishPercentiles(0.5, 0.80, 0.90, 0.95, 0.99).register(prometheusRegistry);
     }
 }
